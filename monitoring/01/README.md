@@ -145,10 +145,13 @@ docker compose logs --tail=100 kapacitor
 - ./kapacitor/data/:/var/lib/kapacitor:Z
 - ./chronograf/data/:/var/lib/chronograf/:Z
 
+<img width="1914" height="962" alt="7" src="https://github.com/user-attachments/assets/be531f2e-af50-45a1-87be-8b8f4ba92102" />
+
 ---
 
 8.
 
+<img width="2557" height="1134" alt="8" src="https://github.com/user-attachments/assets/dbde5917-c8e6-4b3c-8937-79497a8e8567" />
 
 ---
 
@@ -209,6 +212,7 @@ docker compose logs --tail=100 telegraf
 - в логах не должно быть `E!` и `permission denied`.
 - Нужно подождать 30 сек, пока DB поднимется.
 
+<img width="2560" height="1179" alt="9" src="https://github.com/user-attachments/assets/2cb0f165-f48c-4cac-98db-c79588539e9c" />
 
 
 ---
