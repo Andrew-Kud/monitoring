@@ -1,0 +1,199 @@
+name: elk
+
+x-base: &base
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+x-es-env: &es-env
+  cluster.name: elk-lab
+  discovery.seed_hosts: es-hot
+  bootstrap.memory_lock: "true"
+  xpack.license.self_generated.type: basic
+  xpack.security.enabled: "true"
+  xpack.security.http.ssl.enabled: "true"
+  xpack.security.http.ssl.certificate_authorities: certs/ca.crt
+  xpack.security.transport.ssl.enabled: "true"
+  xpack.security.transport.ssl.verification_mode: certificate
+  xpack.security.transport.ssl.certificate_authorities: certs/ca.crt
+  ES_JAVA_OPTS: "-Xms${ES_HEAP} -Xmx${ES_HEAP}"
+
+x-es-ulimits: &es-ulimits
+  memlock: { soft: -1, hard: -1 }
+  nofile: { soft: 65536, hard: 65536 }
+
+x-es-health: &es-health
+  test: ["CMD-SHELL", "curl -s --cacert config/certs/ca.crt https://localhost:9200 | grep -q 'missing authentication credentials'"]
+  interval: 10s
+  timeout: 10s
+  retries: 30
+  start_period: 60s
+
+services:
+  es-hot:
+    <<: *base
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    hostname: es-hot
+    environment:
+      <<: *es-env
+      node.name: es-hot
+      node.roles: master,data_hot,data_content,ingest
+      cluster.initial_master_nodes: es-hot
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
+      xpack.security.http.ssl.key: certs/es-hot/es-hot.key
+      xpack.security.http.ssl.certificate: certs/es-hot/es-hot.crt
+      xpack.security.transport.ssl.key: certs/es-hot/es-hot.key
+      xpack.security.transport.ssl.certificate: certs/es-hot/es-hot.crt
+    volumes:
+      - ./certs/ca/ca.crt:/usr/share/elasticsearch/config/certs/ca.crt:ro
+      - ./certs/es-hot:/usr/share/elasticsearch/config/certs/es-hot:ro
+      - ./data/es-hot:/usr/share/elasticsearch/data
+    ports:
+      - "127.0.0.1:9200:9200"
+    ulimits: *es-ulimits
+    mem_limit: ${ES_MEM_LIMIT}
+    networks: [elk]
+    healthcheck: *es-health
+
+  es-warm:
+    <<: *base
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    hostname: es-warm
+    environment:
+      <<: *es-env
+      node.name: es-warm
+      node.roles: data_warm
+      xpack.security.http.ssl.key: certs/es-warm/es-warm.key
+      xpack.security.http.ssl.certificate: certs/es-warm/es-warm.crt
+      xpack.security.transport.ssl.key: certs/es-warm/es-warm.key
+      xpack.security.transport.ssl.certificate: certs/es-warm/es-warm.crt
+    volumes:
+      - ./certs/ca/ca.crt:/usr/share/elasticsearch/config/certs/ca.crt:ro
+      - ./certs/es-warm:/usr/share/elasticsearch/config/certs/es-warm:ro
+      - ./data/es-warm:/usr/share/elasticsearch/data
+    ulimits: *es-ulimits
+    mem_limit: ${ES_MEM_LIMIT}
+    networks: [elk]
+    healthcheck: *es-health
+    depends_on:
+      es-hot:
+        condition: service_healthy
+
+  setup:
+    <<: *base
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    restart: "no"
+    command: ["bash", "/setup/elastic.sh"]
+    environment:
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
+      KIBANA_PASSWORD: ${KIBANA_PASSWORD}
+      LOGSTASH_INTERNAL_PASSWORD: ${LOGSTASH_INTERNAL_PASSWORD}
+    volumes:
+      - ./certs/ca/ca.crt:/certs/ca.crt:ro
+      - ./setup/elastic.sh:/setup/elastic.sh:ro
+    networks: [elk]
+    depends_on:
+      es-hot:
+        condition: service_healthy
+
+  kibana:
+    <<: *base
+    image: docker.elastic.co/kibana/kibana:${STACK_VERSION}
+    hostname: kibana
+    environment:
+      KIBANA_PASSWORD: ${KIBANA_PASSWORD}
+      KIBANA_ENC_KEY_SO: ${KIBANA_ENC_KEY_SO}
+      KIBANA_ENC_KEY_SEC: ${KIBANA_ENC_KEY_SEC}
+      KIBANA_ENC_KEY_REP: ${KIBANA_ENC_KEY_REP}
+    volumes:
+      - ./config/kibana/kibana.yml:/usr/share/kibana/config/kibana.yml:ro
+      - ./certs/ca/ca.crt:/usr/share/kibana/config/certs/ca.crt:ro
+      - ./certs/kibana:/usr/share/kibana/config/certs/kibana:ro
+      - ./data/kibana:/usr/share/kibana/data
+    ports:
+      - "127.0.0.1:5601:5601"
+    mem_limit: ${KIBANA_MEM_LIMIT}
+    networks: [elk]
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' --cacert config/certs/ca.crt https://localhost:5601/ | grep -qE '^(200|302)$'"]
+      interval: 15s
+      timeout: 10s
+      retries: 30
+      start_period: 90s
+
+  logstash:
+    <<: *base
+    image: docker.elastic.co/logstash/logstash:${STACK_VERSION}
+    hostname: logstash
+    environment:
+      LS_JAVA_OPTS: "-Xms512m -Xmx512m"
+      LOGSTASH_INTERNAL_PASSWORD: ${LOGSTASH_INTERNAL_PASSWORD}
+    volumes:
+      - ./config/logstash/logstash.yml:/usr/share/logstash/config/logstash.yml
+      - ./config/logstash/pipeline:/usr/share/logstash/pipeline:ro
+      - ./certs/ca/ca.crt:/usr/share/logstash/config/certs/ca.crt:ro
+      - ./certs/logstash:/usr/share/logstash/config/certs/logstash:ro
+      - ./data/logstash:/usr/share/logstash/data
+    ports:
+      - "127.0.0.1:5044:5044"
+      - "127.0.0.1:5000:5000"
+    mem_limit: ${LS_MEM_LIMIT}
+    networks: [elk]
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://127.0.0.1:9600/ >/dev/null"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+
+  filebeat:
+    <<: *base
+    image: docker.elastic.co/beats/filebeat:${STACK_VERSION}
+    hostname: filebeat
+    user: root
+    volumes:
+      - ./config/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - ./certs/ca/ca.crt:/usr/share/filebeat/certs/ca.crt:ro
+      - ./certs/filebeat:/usr/share/filebeat/certs/filebeat:ro
+      - ./data/filebeat:/usr/share/filebeat/data
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    mem_limit: 256m
+    networks: [elk]
+    depends_on:
+      logstash:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "filebeat", "test", "output"]
+      interval: 60s
+      timeout: 15s
+      retries: 5
+      start_period: 30s
+
+  pinger:
+    <<: *base
+    image: python:3.13-alpine
+    profiles: ["app"]
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    network_mode: none
+    command: ["python3", "-u", "/opt/run.py"]
+    volumes:
+      - ./pinger/run.py:/opt/run.py:ro
+    mem_limit: 64m
+
+networks:
+  elk:
+    driver: bridge

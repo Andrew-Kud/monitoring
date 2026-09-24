@@ -1,0 +1,6 @@
+node.name: logstash
+api.http.host: "127.0.0.1"
+api.http.port: 9600
+path.data: /usr/share/logstash/data
+queue.type: persisted
+queue.max_bytes: 1gb

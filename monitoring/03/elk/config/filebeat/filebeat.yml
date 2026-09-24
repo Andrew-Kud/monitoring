@@ -1,0 +1,24 @@
+filebeat.inputs:
+  - type: filestream
+    id: docker-containers
+    paths:
+      - /var/lib/docker/containers/*/*-json.log
+    parsers:
+      - container:
+          stream: all
+          format: docker
+
+processors:
+  - add_docker_metadata:
+      host: "unix:///var/run/docker.sock"
+
+output.logstash:
+  hosts: ["logstash:5044"]
+  ssl.enabled: true
+  ssl.verification_mode: full
+  ssl.certificate_authorities: ["/usr/share/filebeat/certs/ca.crt"]
+  ssl.certificate: "/usr/share/filebeat/certs/filebeat/filebeat.crt"
+  ssl.key: "/usr/share/filebeat/certs/filebeat/filebeat.key"
+
+logging.level: info
+logging.metrics.enabled: false
